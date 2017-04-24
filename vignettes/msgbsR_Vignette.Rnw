@@ -1,0 +1,171 @@
+
+\documentclass{article}
+
+\usepackage{natbib}
+\usepackage{graphics}
+\usepackage{amsmath}
+\usepackage{indentfirst}
+\usepackage[utf8]{inputenc}
+\usepackage{color}
+\usepackage{hyperref}
+
+% \VignetteIndexEntry{msgbsR_Example}
+
+\begin{document}
+\SweaveOpts{concordance=TRUE}
+\title{msgbsR: an R package to analyse methylation sensitive genotyping by sequencing (MS-GBS) data}
+\author{Benjamin Mayne}
+\maketitle
+
+\tableofcontents
+
+\clearpage
+
+\section{Introduction}
+
+Current data analysis tools do not fulfil all experimental designs. For example, GBS experiments using methylation sensitive restriction enzymes (REs), which is also known as methylation sensitive genotyping by sequencing (MS-GBS), is an effective method to identify differentially methylated sites that may not be accessible in other technologies such as microarrays and methyl capture sequencing. However, current data analysis tools do not satisfy the requirements for these types of experimental designs.
+
+Here we present msgbsR, an R package for data analysis of MS-GBS experiments. Read counts and cut sites from a MS-GBS experiment can be read directly into the R environment from a sorted and indexed BAM file(s).
+
+\section{Reading data into R}
+
+The analysis with the msgbsR pipeline begins with a directory which contains sorted and indexed BAM file(s). msgbsR contains an example data set containing 6 samples from a MS-GBS experiment using the restriction enzyme MspI. In this example the 6 samples are from the prostate of a rat and have been truncated for chromosome 20. 3 of the samples were fed a control diet and the other 3 were fed an experimental high fat diet.
+
+To read in the data directly into the R environment can be done using the rawCounts() function, which requires the directory path to where the sorted and indexed files are located and the desired number of threads to be run (Default = 1).
+
+<<load the example data>>=
+library(msgbsR)
+library(GenomicRanges)
+library(SummarizedExperiment)
+
+my_path <- system.file("extdata", package = "msgbsR")
+se <- rawCounts(bamFilepath = my_path)
+dim(assay(se))
+@
+
+The result is an RangedSummarizedExperiment object containing the read counts. The columns are samples and the rows contain the location of each unique cut sites. Each cut site has been given a unique ID (chr:position-position:strand). The cut site IDs can be turned into a GRanges object. Information regarding the samples such as treatment or other groups can be added into the return object as shown below
+
+<<insert metadata >>=
+colData(se) <- DataFrame(Group = c(rep("Control", 3), rep("Experimental", 3)),
+                         row.names = colnames(assay(se)))
+@
+
+\section{Confirmation of correct cut sites}
+
+After the data has been generated into the R environment, the next step is to confirm that the cut sites were the correctly generated sites. In this example, the methylated sensitive restriction enzyme that has been used is MspI which recognizes a 4bp sequence (C/CGG). MspI cuts between the two cytosines when the outside cytosine is methylated.
+
+The first step is to extract the location of the cut sites from se and adjust the cut sites such that the region will cover the recognition sequence of MspI. It is important to note that in this example the user must adjust the region over the cut sites specifically for each strand. In other words although the enzyme cuts at C/CGG on the minus strand this would appear as CCG/G. The code below shows how to adjust the postioining of the cut sites to cover the recginition site on each strand.
+
+<<extract cut sites>>=
+cutSites <- rowRanges(se)
+
+# # Adjust the cut sites to overlap recognition site on each strand
+start(cutSites) <- ifelse(test = strand(cutSites) == '+',
+                          yes = start(cutSites) - 1, no = start(cutSites) - 2)
+end(cutSites) <- ifelse(test = strand(cutSites) == '+',
+                          yes = end(cutSites) + 2, no = end(cutSites) + 1)
+@
+
+The object cutSites is a GRanges object that contains the start and end position of the MspI sequence length around the cut sites. These cut sites can now be checked if the sequence matches the MspI sequence.
+
+msgbsR offer two approaches to checking the cut sites. The first approach is to use a BSgenome which can be obtained from Bioconductor. In this example, BSgenome.Rnorvegicus.UCSC.rn6 will be used.
+
+<<run checkCuts with BSgenome>>=
+library(BSgenome.Rnorvegicus.UCSC.rn6)
+correctCuts <- checkCuts(cutSites = cutSites, genome = "rn6", seq = "CCGG")
+@
+
+If a BSgenome is unavailable for a species of interest, another option to checking the cut sites is to use a fasta file which can be used throught the checkCuts() function.
+
+The correctCuts data object is in the format of a GRanges object and contains the correct sites that contained the recognition sequence. These sites can be kept within se by using the subsetByOverlaps function.
+
+The incorrect MspI cut sites can be filtered out of datCounts:
+<<filter out incorrect cuts>>=
+se <- subsetByOverlaps(se, correctCuts)
+dim(assay(se))
+@
+
+se now contains the correct cut sites and can now be used in downstream analyses.
+
+\section{Visualization of read counts}
+
+Before any further downstream analyses with the data, the user may want to filter out samples that did not generate a sufficient number of read counts or cut sites. The msgbsR package contains a function which plots the total number of read counts against the total number of cut sites produced per sample. The user can also use the function to visulaise if different categories or groups produced varying amount of cut sites or total amount of reads.
+
+To visualize the total number of read counts against the total number of cut sites produced per sample:
+<<plot counts per cut sites >>=
+plotCounts(se = se, cateogory = "Group")
+@
+
+This function generates a plot (Figure 1) where the x axis and y axis represents the total number of reads and the total number of cut sites produced for each sample respectively.
+
+\setkeys{Gin}{width=1\linewidth}
+\begin{figure}
+\begin{center}
+<<label=fig1, fig=TRUE, echo=FALSE, eps=FALSE, >>=
+plotCounts(se = se, cateogory = "Group")
+@
+\end{center}
+\caption{The distribution of the total number of reads and cut sites produced by each sample.}
+\label{fig:fig1}
+\end{figure}
+
+\clearpage
+
+\section{Differential methylation analysis}
+
+msgbsR utilizes edgeR in order to determine which cut sites are differentially methylated between groups. Since MS-GBS experiments can have multiple groups or conditions msgbsR offers a wrapper function of edgeR (Zhou et al., 2014) tools to automate differential methylation analyses.
+
+To determine which cut sites are differentiallly methylated between groups:
+<<differential methylation>>=
+top <- diffMeth(se = se, cateogory = "Group",
+                condition1 = "Control", condition2 = "Experimental",
+                cpmThreshold = 1, thresholdSamples = 1)
+@
+
+The top object now contains a data frame of the cut sites that had a CPM > 1 in at least 1 sample and which cut sites are differentially methylated between the two groups.
+
+\section{Visualization of cut site locations}
+
+The msgbsR package contains a function to allow visualization of the location of the cut sites. Given the lengths of the chromosomes the cut sites can be visualized in a circos plot (Figure 2).
+
+Firstly, define the length of the chromosome.
+<<chr20 length>>=
+ratChr <- seqlengths(BSgenome.Rnorvegicus.UCSC.rn6)["chr20"]
+@
+
+Extract the differentially methylated cut sites.
+<<top sites>>=
+my_cuts <- GRanges(top$site[which(top$FDR < 0.05)])
+@
+
+To generate a circos plot:
+<<circos plot>>=
+plotCircos(cutSites = my_cuts, seqlengths = ratChr,
+           cutSite.colour = "red", seqlengths.colour = "blue")
+@
+
+\setkeys{Gin}{width=1\linewidth}
+\begin{figure}
+\begin{center}
+<<label=fig2, fig=TRUE, echo=FALSE, eps=FALSE, >>=
+plotCircos(cutSites = my_cuts, seqlengths = ratChr,
+           cutSite.colour = "red", seqlengths.colour = "blue")
+@
+\end{center}
+\caption{A circos plot of chromosome 20 representing cut sites defined by the user.}
+\label{fig:fig2}
+\end{figure}
+
+\clearpage
+
+\section{Session Information}
+This analysis was conducted on:
+<<annotation>>=
+sessionInfo()
+@
+
+\section{References}
+\paragraph{} \hspace{0pt} \\
+Zhou X, Lindsay H, Robinson MD (2014). Robustly detecting differential expression in RNA sequencing data using observation weights. Nucleic Acids Research, 42(11), e91.
+
+\end{document}
