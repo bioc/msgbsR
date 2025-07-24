@@ -10,7 +10,7 @@
 #' @return A circos plot showing the locations of the cut sites.
 #' @importFrom  S4Vectors Rle
 #' @import GenomicRanges
-#' @import GenomeInfoDb
+#' @import Seqinfo
 #' @importFrom IRanges IRanges
 #' @importFrom ggbio autoplot circle ggbio
 #' @import ggplot2
